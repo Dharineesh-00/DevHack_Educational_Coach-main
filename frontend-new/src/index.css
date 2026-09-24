@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f5f7fa;
+  color: #111827;
+}
+
+[class~="bg-[#1e1e2e]"] { background-color: #fafafa !important; }
+[class~="bg-[#181825]"] { background-color: #ffffff !important; }
+[class~="bg-[#11111b]"] { background-color: #f5f7fa !important; }
+[class~="bg-[#313244]"] { background-color: #f2f4f7 !important; }
+[class~="hover:bg-[#232334]"]:hover { background-color: #eef4ff !important; }
+
+[class~="border-[#313244]"] { border-color: #d9dee7 !important; }
+[class~="border-[#1e1e2e]"] { border-color: #e5e7eb !important; }
+[class~="border-[#313244]/60"] { border-color: rgb(217 222 231 / 60%) !important; }
+
+[class~="text-[#cdd6f4]"] { color: #111827 !important; }
+[class~="text-[#a6adc8]"] { color: #667085 !important; }
+[class~="text-[#585b70]"] { color: #98a2b3 !important; }
+[class~="text-[#89b4fa]"] { color: #2563eb !important; }
+[class~="text-[#cba6f7]"] { color: #2563eb !important; }
+[class~="text-[#1e1e2e]"] { color: #111827 !important; }
+
+[class~="bg-[#89b4fa]"] { background-color: #2563eb !important; }
+[class~="hover:bg-[#74c7ec]"]:hover { background-color: #1d4ed8 !important; }
+[class~="bg-[#cba6f7]"] { background-color: #2563eb !important; }
+[class~="hover:bg-[#b4befe]"]:hover { background-color: #1d4ed8 !important; }
+[class~="ring-[#89b4fa]"] { --tw-ring-color: #2563eb !important; }
+[class~="focus:ring-[#89b4fa]"]:focus { --tw-ring-color: #2563eb !important; }
+[class~="placeholder-[#585b70]"]::placeholder { color: #98a2b3 !important; }
+
+[class~="text-[#a6e3a1]"] { color: #16a34a !important; }
+[class~="bg-[#a6e3a1]"] { background-color: #16a34a !important; }
+[class~="text-[#f9e2af]"] { color: #d97706 !important; }
+[class~="text-[#f38ba8]"] { color: #dc2626 !important; }
+
+/* Keep the dense workspace readable at screenshot-sized desktop widths. */
+.text-sm { font-size: 0.8125rem !important; }
+.text-base { font-size: 0.875rem !important; }

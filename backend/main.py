@@ -1,0 +1,256 @@
+import logging
+
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+import httpx
+
+import orchestrator
+from services.llm_client import OpenRouterClient
+from services.test_runner import ExecutionDetail, TestResults
+
+_llm = OpenRouterClient()  # shared singleton for /chat
+
+# ------------------------------------------------------------------
+# Logging — prints agent discussion to the uvicorn terminal.
+# Change level to logging.WARNING (or remove) when no longer needed.
+# ------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)s  %(levelname)s%(message)s",
+    datefmt="%H:%M:%S",
+)
+
+app = FastAPI(
+    title="DSA Tutor API",
+    description=(
+        "Submit Python code for execution, automated complexity analysis, "
+        "and Socratic tutoring feedback powered by a local LLM."
+    ),
+    version="2.0.0",
+)
+
+# ---------------------------------------------------------------------------
+# CORS — allow the Vite dev server (and any localhost port) to call the API
+# ---------------------------------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:5176",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5175",
+    ],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|172\.\d+\.\d+\.\d+):\d+",
+    allow_credentials=True,
+    allow_methods=["*"],   # includes OPTIONS so preflight passes
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------------------------
+# Request / Response models
+# ---------------------------------------------------------------------------
+
+class CodeRequest(BaseModel):
+    language: str = Field(
+        default="python",
+        min_length=1,
+        description="Programming language identifier supported by Piston (e.g. 'python').",
+        examples=["python"],
+    )
+    code: str = Field(
+        ...,
+        min_length=1,
+        description="Source code to execute and analyse.",
+        examples=["def add(a, b):\n    return a + b\nprint(add(1, 2))"],
+    )
+    user_id: str = Field(
+        default="anonymous",
+        min_length=1,
+        description="Learner identifier used to track mastery progress.",
+        examples=["user_42"],
+    )
+    problem_id: str = Field(
+        default="valid-parentheses",
+        description="Problem identifier slug (e.g. 'valid-parentheses' or 'valid_parentheses').",
+        examples=["valid-parentheses"],
+    )
+
+
+class MisconceptionDetail(BaseModel):
+    id: str
+    confidence: float
+    evidence_line: int
+
+
+class TrajectoryDetail(BaseModel):
+    recurrence_count: int
+    same_misconception_streak: bool
+
+
+class SubmitResponse(BaseModel):
+    # Execution details
+    language: str
+    version: str
+    stdout: str
+    stderr: str
+    execution_output: str
+    exit_code: int
+
+    # Agent debate — rendered in the React agent terminal
+    agent_logs: list[str]
+    tutor_response: str
+
+    # Misconception pipeline (contract-aligned nested objects)
+    misconception: MisconceptionDetail
+    trajectory: TrajectoryDetail
+
+    # Real deterministic test execution results
+    test_results: TestResults | None = None
+    execution: ExecutionDetail | None = None
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/submit",
+    response_model=SubmitResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit code for execution, analysis, and tutoring",
+)
+async def submit_code(payload: CodeRequest) -> SubmitResponse:
+    """
+    Deterministic Test Execution & Good Cop / Bad Cop Interview Panel:
+
+    1. **Execute** deterministic test harness via Piston.
+    2. **Compare** actual output with expected output.
+    3. **Critic** roasts the code based on test evidence.
+    4. **Defender** counters the Critic and highlights strengths.
+    5. **Judge** synthesises a Socratic hint for the student.
+
+    Returns ``test_results``, ``agent_logs``, and ``tutor_response``.
+    """
+    try:
+        result = await orchestrator.run(
+            code=payload.code,
+            language=payload.language,
+            user_id=payload.user_id,
+            problem_id=payload.problem_id,
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="A downstream service (Piston or Ollama) timed out. Please try again.",
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Downstream service error: HTTP {exc.response.status_code}",
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not reach a downstream service: {exc}",
+        )
+
+    return SubmitResponse(
+        language=result.language,
+        version=result.version,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        execution_output=result.execution_output,
+        exit_code=result.exit_code,
+        agent_logs=result.agent_logs,
+        tutor_response=result.tutor_feedback,
+        misconception=MisconceptionDetail(
+            id=result.misconception_id,
+            confidence=result.misconception_confidence,
+            evidence_line=result.misconception_evidence_line,
+        ),
+        trajectory=TrajectoryDetail(
+            recurrence_count=result.recurrence_count,
+            same_misconception_streak=result.same_misconception_streak,
+        ),
+        test_results=result.test_results,
+        execution=result.test_results.execution if result.test_results else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /chat  — direct chatbot conversation
+# ---------------------------------------------------------------------------
+
+_CHAT_SYSTEM = """\
+You are a helpful Socratic DSA (Data Structures & Algorithms) tutor.
+Guide the student with probing questions rather than giving away answers.
+Be concise, encouraging, and technically accurate.
+"""
+
+
+def _offline_tutor_reply() -> str:
+    return (
+        "Start with a tiny example and ask what must remain true after each step. "
+        "What information does your algorithm need to remember, and when is it "
+        "safe to discard it? Use that invariant to choose the next data-structure "
+        "operation, then test an edge case such as an empty input or a single item."
+    )
+
+
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="'user' or 'assistant'")
+    content: str = Field(..., min_length=1)
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(
+        ...,
+        description="Full conversation history including the new user message.",
+    )
+
+
+class ChatResponse(BaseModel):
+    reply: str
+
+
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Chat with the DSA Tutor (OpenRouter / claude-3-haiku)",
+)
+async def chat(payload: ChatRequest) -> ChatResponse:
+    """
+    Send a conversation history and receive the tutor's next reply.
+    Uses anthropic/claude-3-haiku via OpenRouter with automatic
+    fallback to free models if the primary is unavailable.
+    """
+    messages = [{"role": "system", "content": _CHAT_SYSTEM}] + [
+        {"role": m.role, "content": m.content} for m in payload.messages
+    ]
+    try:
+        reply = await _llm.chat(messages, options={"max_tokens": 512})
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="OpenRouter request timed out. Please try again.",
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"OpenRouter error: HTTP {exc.response.status_code}",
+        )
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and "All OpenRouter models failed" in str(exc):
+            return ChatResponse(reply=_offline_tutor_reply())
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Chat service error: {exc}",
+        )
+    return ChatResponse(reply=reply)
+ 
