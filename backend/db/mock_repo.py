@@ -12,6 +12,7 @@ the ``repo`` argument passed to :func:`orchestrator.run`.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 
 from db.base_repo import MetricsRepository
 
@@ -30,6 +31,9 @@ class MockMetricsRepository(MetricsRepository):
         result = await orchestrator.run(code, repo=repo)
     """
 
+    def __init__(self) -> None:
+        self._misconception_counts: dict[tuple[str, str], int] = defaultdict(int)
+
     async def update_user_mastery(
         self,
         user_id: str,
@@ -42,3 +46,20 @@ class MockMetricsRepository(MetricsRepository):
             concept,
             score,
         )
+
+    async def record_misconception(
+        self,
+        user_id: str,
+        misconception_id: str,
+        confidence: float,
+    ) -> int:
+        pair = (user_id, misconception_id)
+        prior_count = self._misconception_counts[pair]
+        self._misconception_counts[pair] += 1
+        logger.info(
+            "[MockRepo] record_misconception | user_id=%r  misconception_id=%r  confidence=%f",
+            user_id,
+            misconception_id,
+            confidence,
+        )
+        return prior_count

@@ -35,3 +35,17 @@ class MetricsRepository(ABC):
             concept: DSA concept being tracked (e.g. ``"binary_search"``).
             score:   Mastery score (0–100 recommended, but not enforced here).
         """
+
+    @abstractmethod
+    async def record_misconception(
+        self,
+        user_id: str,
+        misconception_id: str,
+        confidence: float,
+    ) -> int:
+        """
+        Insert a misconception event and return prior events for the pair.
+
+        The first occurrence for an exact ``(user_id, misconception_id)``
+        pair returns ``0``.
+        """

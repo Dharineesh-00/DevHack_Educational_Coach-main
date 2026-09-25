@@ -202,17 +202,23 @@ def test_empty_input_case(piston_client, valid_parentheses_problem):
 
 def test_api_submit_endpoint_preserves_contract_and_returns_test_results():
     """6. /submit returns test_results, execution, and all existing evaluation/tutor fields."""
-    client = TestClient(app)
+    from unittest.mock import AsyncMock, patch
 
-    response = client.post(
-        "/submit",
-        json={
-            "language": "python",
-            "code": CORRECT_SOLUTION,
-            "user_id": "test_user_deterministic",
-            "problem_id": "valid-parentheses",
-        },
-    )
+    import orchestrator
+
+    mocked_generate = AsyncMock(return_value="Deterministic mocked tutor response.")
+    with patch.object(orchestrator._ollama, "generate", mocked_generate):
+        client = TestClient(app)
+
+        response = client.post(
+            "/submit",
+            json={
+                "language": "python",
+                "code": CORRECT_SOLUTION,
+                "user_id": "test_user_deterministic",
+                "problem_id": "valid-parentheses",
+            },
+        )
 
     assert response.status_code == 200
     data = response.json()
