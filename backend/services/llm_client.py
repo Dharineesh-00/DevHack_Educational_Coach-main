@@ -1,7 +1,7 @@
 """
 Async client for OpenRouter (https://openrouter.ai).
 
-Primary model : anthropic/claude-3-haiku
+Primary model : openrouter/free
 Fallback models: free-tier models tried in order when the primary fails.
 
 Supports:
@@ -12,6 +12,7 @@ Supports:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import AsyncGenerator
@@ -27,17 +28,32 @@ import os
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_API_KEY  = os.getenv("OPENROUTER_API_KEY", "")
-PRIMARY_MODEL       = "anthropic/claude-3-haiku"
+PRIMARY_MODEL       = "openrouter/free"
 
 # Free-tier fallback models tried in order when the primary fails.
 FALLBACK_MODELS: list[str] = [
-    "mistralai/mistral-7b-instruct:free",
+    "poolside/laguna-s-2.1:free",
+    "inclusionai/ling-3.0-flash-fin:free",
+    "deepseek/deepseek-r1:free",
     "meta-llama/llama-3.2-3b-instruct:free",
-    "google/gemma-2-9b-it:free",
-    "qwen/qwen-2-7b-instruct:free",
 ]
 
 DEFAULT_TIMEOUT = 60.0
+CANNED_OFFLINE_RESPONSE = (
+    "Start with a small example and identify the invariant your algorithm "
+    "must preserve after each operation. Which edge case would most likely "
+    "break the current approach, and what state must your data structure "
+    "remember to handle it?"
+)
+
+
+class AllModelsFailedError(RuntimeError):
+    """Raised when every configured OpenRouter model fails."""
+
+    def __init__(self, fallback_response: str, last_exc: Exception | None) -> None:
+        super().__init__("All OpenRouter models failed")
+        self.fallback_response = fallback_response
+        self.last_exc = last_exc
 
 
 class OpenRouterClient:
@@ -98,35 +114,54 @@ class OpenRouterClient:
         Tries the primary model first, then each fallback in order.
         """
         if not self.api_key:
+            logger.warning("[OpenRouter] No API key configured")
             raise RuntimeError("No OpenRouter API key configured; using offline fallback.")
 
         models_to_try = [model or self.model] + self.fallback_models
         last_exc: Exception | None = None
 
         for attempt_model in models_to_try:
-            try:
-                result = await self._complete(
-                    prompt=prompt,
-                    system=system,
-                    model=attempt_model,
-                    options=options or {},
-                )
-                if attempt_model != (model or self.model):
-                    logger.warning(
-                        "[OpenRouter] Primary failed; used fallback: %s", attempt_model
+            for rate_limit_attempt in range(2):
+                try:
+                    result = await self._complete(
+                        prompt=prompt,
+                        system=system,
+                        model=attempt_model,
+                        options=options or {},
                     )
-                return result
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[OpenRouter] Model %s failed: %s", attempt_model, exc)
-                last_exc = exc
+                    if attempt_model != (model or self.model):
+                        logger.warning(
+                            "[OpenRouter] Primary failed; used fallback: %s", attempt_model
+                        )
+                    return result
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code == 429 and rate_limit_attempt == 0:
+                        logger.warning(
+                            "[OpenRouter] Rate limited on %s, retrying once...",
+                            attempt_model,
+                        )
+                        await asyncio.sleep(1.5)
+                        continue
+                    logger.warning(
+                        "[OpenRouter] Model %s failed: %s: %s",
+                        attempt_model,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    last_exc = exc
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "[OpenRouter] Model %s failed: %s: %s",
+                        attempt_model,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    last_exc = exc
+                    break
 
         logger.error("All OpenRouter models failed; using offline tutor response: %s", last_exc)
-        return (
-            "Start with a small example and identify the invariant your algorithm "
-            "must preserve after each operation. Which edge case would most likely "
-            "break the current approach, and what state must your data structure "
-            "remember to handle it?"
-        )
+        raise AllModelsFailedError(CANNED_OFFLINE_RESPONSE, last_exc) from last_exc
 
     async def stream_generate(
         self,
@@ -185,10 +220,14 @@ class OpenRouterClient:
 
         for attempt_model in models_to_try:
             try:
+                request_options = {
+                    "reasoning": {"exclude": True},
+                    **(options or {}),
+                }
                 payload: dict = {
                     "model": attempt_model,
                     "messages": messages,
-                    **(options or {}),
+                    **request_options,
                 }
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
@@ -225,7 +264,8 @@ class OpenRouterClient:
     ) -> str:
         """Non-streaming single completion."""
         messages = self._build_messages(prompt, system)
-        payload: dict = {"model": model, "messages": messages, **options}
+        request_options = {"reasoning": {"exclude": True}, **options}
+        payload: dict = {"model": model, "messages": messages, **request_options}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -234,7 +274,10 @@ class OpenRouterClient:
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"].get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError(f"Model {model} returned no text content")
+            return content
 
     async def _stream_complete(
         self,

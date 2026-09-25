@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import re as _re
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -24,7 +23,8 @@ from dataclasses import dataclass
 from db.base_repo import MetricsRepository
 from db.mock_repo import MockMetricsRepository
 from problems.definitions import get_problem
-from services.llm_client import OpenRouterClient
+from problems.misconceptions import get_misconceptions
+from services.llm_client import AllModelsFailedError, OpenRouterClient
 from services.piston_runner import PistonClient
 from services.test_runner import (
     TestResults,
@@ -65,7 +65,7 @@ _piston = PistonClient()
 _ollama = OpenRouterClient()
 
 # OpenRouter generation options for short, focused agent responses.
-_FAST_OPTS: dict = {"max_tokens": 200, "temperature": 0.75}
+_FAST_OPTS: dict = {"max_tokens": 350, "temperature": 0.75}
 
 
 @dataclass
@@ -95,12 +95,21 @@ class OrchestrationResult:
     test_results: TestResults | None = None
 
 
-async def _safe_generate(prompt: str, options: dict | None = None, fallback: str = "") -> str:
+async def _safe_generate(
+    prompt: str,
+    options: dict | None = None,
+    fallback: str = "",
+    use_offline_fallback: bool = False,
+) -> str:
     """Generate LLM response with graceful fallback on service failure."""
     try:
         reply = await _ollama.generate(prompt=prompt, options=options or _FAST_OPTS)
         clean = reply.strip()
         return clean if clean else fallback
+    except AllModelsFailedError as exc:
+        if use_offline_fallback:
+            return exc.fallback_response
+        raise exc
     except Exception as exc:
         logger.warning("[orchestrator] LLM generation failed, using fallback: %s", exc)
         return fallback
@@ -199,7 +208,12 @@ async def run(
     else:
         critic_fallback = "Your implementation has structural flaws and improper handling of edge cases."
 
-    critic_review = await _safe_generate(critic_prompt, options=_FAST_OPTS, fallback=critic_fallback)
+    critic_review = await _safe_generate(
+        critic_prompt,
+        options=_FAST_OPTS,
+        fallback=critic_fallback,
+        use_offline_fallback=True,
+    )
     logger.info("\n[CRITIC]\n%s\n%s", critic_review, _SEP)
 
     # ------------------------------------------------------------------
@@ -220,7 +234,12 @@ async def run(
     )
 
     defender_fallback = "You have a solid conceptual foundation with the stack; debugging the mismatched edge cases will get this passing."
-    defender_review = await _safe_generate(defender_prompt, options=_FAST_OPTS, fallback=defender_fallback)
+    defender_review = await _safe_generate(
+        defender_prompt,
+        options=_FAST_OPTS,
+        fallback=defender_fallback,
+        use_offline_fallback=True,
+    )
     logger.info("\n[DEFENDER]\n%s\n%s", defender_review, _SEP)
 
     # ------------------------------------------------------------------
@@ -243,31 +262,52 @@ async def run(
     else:
         judge_fallback = "Good start on utilizing a stack for bracket tracking. When you see a closing bracket, what condition must the top of the stack satisfy?"
 
-    final_response = await _safe_generate(judge_prompt, options=_FAST_OPTS, fallback=judge_fallback)
+    final_response = await _safe_generate(
+        judge_prompt,
+        options=_FAST_OPTS,
+        fallback=judge_fallback,
+        use_offline_fallback=True,
+    )
     logger.info("\n[JUDGE]\n%s\n%s", final_response, _SEP)
 
     # ------------------------------------------------------------------
     # Step 5 — Extract structured misconception from Critic's review
     # ------------------------------------------------------------------
+    allowed_misconceptions = get_misconceptions(problem_id)
+    allowed_ids = {item["id"] for item in allowed_misconceptions}
+    misconception_options = "\n".join(
+        f'- {item["id"]}: {item["description"]}' for item in allowed_misconceptions
+    )
     misconception_prompt = (
         f"Given this code review: \"{critic_review}\", "
+        f"choose exactly ONE misconception from this allowed list:\n"
+        f"{misconception_options}\n"
         f"respond with ONLY valid JSON (no markdown) in this exact shape: "
-        f'{{"id": "<2-5-word-kebab-slug>", "confidence": <0.0-1.0>}}. '
-        f"No other text."
-    )
-    raw_misc = await _safe_generate(
-        misconception_prompt,
-        options={"max_tokens": 40, "temperature": 0.2},
-        fallback='{"id": "bracket-stack-ordering", "confidence": 0.7}',
+        f'{{"id": "<one allowed id>", "confidence": <0.0-1.0>}}. '
+        f"Do not invent a new id. No other text."
     )
     try:
-        misc_data = _json.loads(raw_misc)
-        misconception_id: str = misc_data.get("id", "bracket-stack-ordering")
-        misconception_confidence: float = float(misc_data.get("confidence", 0.7))
-    except Exception:
-        m = _re.search(r'"id"\s*:\s*"([^"]+)"', raw_misc)
-        misconception_id = m.group(1) if m else "bracket-stack-ordering"
-        misconception_confidence = 0.6
+        raw_misc = await _safe_generate(
+            misconception_prompt,
+            options={"max_tokens": 120, "temperature": 0.2},
+            fallback='{"id": "other-unspecified", "confidence": 0.5}',
+        )
+    except AllModelsFailedError:
+        logger.warning("[MISCONCEPTION] Skipped LLM classification — all models unavailable")
+        misconception_id = "other-unspecified"
+        misconception_confidence = 0.5
+    else:
+        logger.info("[MISCONCEPTION RAW] %r", raw_misc)
+        try:
+            misc_data = _json.loads(raw_misc)
+            parsed_id = misc_data.get("id")
+            if parsed_id not in allowed_ids:
+                raise ValueError("LLM returned an unlisted misconception ID")
+            misconception_id = parsed_id
+            misconception_confidence = float(misc_data.get("confidence", 0.5))
+        except Exception:
+            misconception_id = "other-unspecified"
+            misconception_confidence = 0.5
 
     evidence_line = next(
         (i + 1 for i, ln in enumerate(code.splitlines()) if ln.strip() and not ln.strip().startswith("#")),
