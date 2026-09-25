@@ -24,7 +24,7 @@ from db.base_repo import MetricsRepository
 from db.mock_repo import MockMetricsRepository
 from problems.definitions import get_problem
 from problems.misconceptions import get_misconceptions
-from services.llm_client import AllModelsFailedError, OpenRouterClient
+from services.ollama_client import AllModelsFailedError, OllamaClient
 from services.piston_runner import PistonClient
 from services.test_runner import (
     TestResults,
@@ -62,7 +62,7 @@ def _vibe(failure_count: int) -> str:
 
 # Shared singletons (instantiated once at import time)
 _piston = PistonClient()
-_ollama = OpenRouterClient()
+_ollama = OllamaClient()
 
 # OpenRouter generation options for short, focused agent responses.
 _FAST_OPTS: dict = {"max_tokens": 350, "temperature": 0.75}
@@ -243,35 +243,7 @@ async def run(
     logger.info("\n[DEFENDER]\n%s\n%s", defender_review, _SEP)
 
     # ------------------------------------------------------------------
-    # Step 4 — Agent 3: The Judge (Socratic Lead Interviewer)
-    # ------------------------------------------------------------------
-    logger.info("\n%s\n[AGENT: JUDGE] Synthesising debate...", _SEP)
-
-    judge_prompt = (
-        f"You are the Lead Interviewer.\n"
-        f"Problem: {problem_title}\n"
-        f"{passed_info}\n"
-        f"The Critic said: \"{critic_review}\".\n"
-        f"The Defender said: \"{defender_review}\".\n\n"
-        f"Synthesize this debate. Write a friendly, 2-sentence response to the student.\n"
-        f"Acknowledge the good (from the Defender), but gently push them to resolve the flaw using a Socratic question. NEVER write code for them."
-    )
-
-    if test_results and test_results.status == "passed":
-        judge_fallback = "Great work getting all test cases to pass! How does your stack size scale in the worst case where all brackets are open?"
-    else:
-        judge_fallback = "Good start on utilizing a stack for bracket tracking. When you see a closing bracket, what condition must the top of the stack satisfy?"
-
-    final_response = await _safe_generate(
-        judge_prompt,
-        options=_FAST_OPTS,
-        fallback=judge_fallback,
-        use_offline_fallback=True,
-    )
-    logger.info("\n[JUDGE]\n%s\n%s", final_response, _SEP)
-
-    # ------------------------------------------------------------------
-    # Step 5 — Extract structured misconception from Critic's review
+    # Step 4 — Extract structured misconception from Critic's review
     # ------------------------------------------------------------------
     allowed_misconceptions = get_misconceptions(problem_id)
     allowed_ids = {item["id"] for item in allowed_misconceptions}
@@ -314,8 +286,49 @@ async def run(
         1,
     )
 
-    recurrence_count = len(_failure_log.get(user_id, []))
+    recurrence_count = await repo.record_misconception(
+        user_id=user_id,
+        misconception_id=misconception_id,
+        confidence=misconception_confidence,
+    )
     same_misconception_streak = recurrence_count >= 2
+
+    # ------------------------------------------------------------------
+    # Step 5 — Agent 3: The Judge (Socratic Lead Interviewer)
+    # ------------------------------------------------------------------
+    logger.info("\n%s\n[AGENT: JUDGE] Synthesising debate...", _SEP)
+
+    escalation_instruction = (
+        "The misconception has recurred at least twice, so escalate specificity: "
+        "name the repeated pattern and ask a targeted Socratic question."
+        if recurrence_count >= 2
+        else "Use a general Socratic question that helps the student resolve the flaw."
+    )
+    judge_prompt = (
+        f"You are the Lead Interviewer.\n"
+        f"Problem: {problem_title}\n"
+        f"{passed_info}\n"
+        f"The Critic said: \"{critic_review}\".\n"
+        f"The Defender said: \"{defender_review}\".\n"
+        f"Detected misconception: {misconception_id} (confidence {misconception_confidence:.2f}).\n"
+        f"Prior occurrences of this misconception: {recurrence_count}.\n"
+        f"{escalation_instruction}\n\n"
+        f"Synthesize this debate. Write a friendly, 2-sentence response to the student.\n"
+        f"Acknowledge the good (from the Defender), but push them to resolve the flaw using a Socratic question. NEVER write code for them."
+    )
+
+    if test_results and test_results.status == "passed":
+        judge_fallback = "Great work getting all test cases to pass! How does your stack size scale in the worst case where all brackets are open?"
+    else:
+        judge_fallback = "Good start on utilizing a stack for bracket tracking. When you see a closing bracket, what condition must the top of the stack satisfy?"
+
+    final_response = await _safe_generate(
+        judge_prompt,
+        options=_FAST_OPTS,
+        fallback=judge_fallback,
+        use_offline_fallback=True,
+    )
+    logger.info("\n[JUDGE]\n%s\n%s", final_response, _SEP)
 
     # ------------------------------------------------------------------
     # Step 6 — Assemble agent logs + persist mastery signal
