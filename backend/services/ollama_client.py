@@ -6,8 +6,6 @@ import logging
 
 import httpx
 
-from services.llm_client import AllModelsFailedError
-
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = "http://localhost:11434"
@@ -17,6 +15,15 @@ DEFAULT_TIMEOUT = 60.0
 
 class OllamaConnectionError(RuntimeError):
     """Raised when the local Ollama server cannot be reached."""
+
+
+class AllModelsFailedError(RuntimeError):
+    """Compatibility exception retained for the orchestrator's safe-generation flow."""
+
+    def __init__(self, fallback_response: str, last_exc: Exception | None = None) -> None:
+        super().__init__("All local Ollama generation attempts failed")
+        self.fallback_response = fallback_response
+        self.last_exc = last_exc
 
 
 class OllamaClient:
@@ -87,6 +94,31 @@ class OllamaClient:
         if not isinstance(result, str):
             raise RuntimeError("Ollama returned an invalid response without text.")
         return result
+
+    async def chat(
+        self,
+        messages: list[dict],
+        *,
+        model: str | None = None,
+        options: dict | None = None,
+    ) -> str:
+        """Generate a reply from an OpenAI-style message history locally."""
+        system = "\n".join(
+            message["content"]
+            for message in messages
+            if message.get("role") == "system"
+        )
+        conversation = "\n\n".join(
+            f"{message.get('role', 'user').title()}: {message.get('content', '')}"
+            for message in messages
+            if message.get("role") != "system"
+        )
+        return await self.generate(
+            prompt=conversation,
+            system=system,
+            model=model,
+            options=options,
+        )
 
 
 __all__ = ["AllModelsFailedError", "OllamaClient", "OllamaConnectionError"]

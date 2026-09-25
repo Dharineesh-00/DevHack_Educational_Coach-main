@@ -10,10 +10,10 @@ from pydantic import BaseModel, Field
 import httpx
 
 import orchestrator
-from services.llm_client import OpenRouterClient
+from services.ollama_client import OllamaClient
 from services.test_runner import ExecutionDetail, TestResults
 
-_llm = OpenRouterClient()  # shared singleton for /chat
+_llm = OllamaClient()  # shared local Ollama singleton for /chat
 
 # ------------------------------------------------------------------
 # Logging — prints agent discussion to the uvicorn terminal.
@@ -226,13 +226,12 @@ class ChatResponse(BaseModel):
     "/chat",
     response_model=ChatResponse,
     status_code=status.HTTP_200_OK,
-    summary="Chat with the DSA Tutor (OpenRouter / claude-3-haiku)",
+    summary="Chat with the DSA Tutor (local Ollama)",
 )
 async def chat(payload: ChatRequest) -> ChatResponse:
     """
     Send a conversation history and receive the tutor's next reply.
-    Uses anthropic/claude-3-haiku via OpenRouter with automatic
-    fallback to free models if the primary is unavailable.
+    Uses the locally running Ollama model.
     """
     messages = [{"role": "system", "content": _CHAT_SYSTEM}] + [
         {"role": m.role, "content": m.content} for m in payload.messages
@@ -242,15 +241,15 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     except httpx.TimeoutException:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="OpenRouter request timed out. Please try again.",
+            detail="Ollama request timed out. Please try again.",
         )
     except httpx.HTTPStatusError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"OpenRouter error: HTTP {exc.response.status_code}",
+            detail=f"Ollama error: HTTP {exc.response.status_code}",
         )
     except Exception as exc:
-        if isinstance(exc, RuntimeError) and "All OpenRouter models failed" in str(exc):
+        if isinstance(exc, RuntimeError) and "All local Ollama generation attempts failed" in str(exc):
             return ChatResponse(reply=_offline_tutor_reply())
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

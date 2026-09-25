@@ -19,7 +19,7 @@ Usage::
 
 from __future__ import annotations
 
-from services.llm_client import OllamaClient
+from services.ollama_client import OllamaClient
 
 
 class BaseAgent:
