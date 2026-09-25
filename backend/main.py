@@ -195,7 +195,14 @@ async def submit_code(payload: CodeRequest) -> SubmitResponse:
     summary="Get recent attempts for a misconception",
 )
 async def get_recent_attempts(user_id: str, misconception_id: str) -> list[dict]:
-    return await _metrics_repo.get_recent_attempts(user_id, misconception_id)
+    attempts = await _metrics_repo.get_recent_attempts(user_id, misconception_id)
+    logging.getLogger(__name__).info(
+        "[ATTEMPTS] user_id=%r misconception_id=%r returning=%r",
+        user_id,
+        misconception_id,
+        attempts,
+    )
+    return attempts
 
 
 # ---------------------------------------------------------------------------

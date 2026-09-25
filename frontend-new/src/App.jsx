@@ -465,6 +465,10 @@ function TutorPanel({ chatHistory, chatInput, setChatInput, onSendChat, isChatLo
 function EvaluationTab({ agentLogs, misconception, testResults }) {
   const execution = testResults?.execution
   const passed = testResults ? `${testResults.passed} / ${testResults.total} tests passed` : 'No submission yet'
+  const agentCards = ['CRITIC', 'DEFENDER', 'JUDGE'].map((role) => ({
+    role,
+    message: agentLogs.find((line) => line.startsWith(`[${role}]`))?.replace(`[${role}] `, '') || 'No analysis yet.',
+  }))
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs">
       <div className="grid grid-cols-3 gap-2">
@@ -474,7 +478,7 @@ function EvaluationTab({ agentLogs, misconception, testResults }) {
       </div>
       <div className="rounded border border-[#d9dee7] bg-white p-3"><div className="font-semibold">Execution</div><div className="mt-1 font-mono text-[#7f1d1d]">{execution?.stderr || testResults?.reason || 'Awaiting submission'}</div></div>
       <div className="rounded border border-[#d9dee7] bg-white p-3"><div className="mb-2 font-semibold">Evaluation flow</div><div className="flex flex-wrap items-center gap-1 text-[#667085]"><span>Submission</span><span>→</span><span>Execution</span><span>→</span><span>Critic + Defender</span><span>→</span><span>Judge</span><span>→</span><span className="text-[#d97706]">{misconception?.id || 'Pending'}</span></div></div>
-      <div className="border-t border-[#d9dee7] pt-3"><div className="mb-2 font-semibold">Agent summary</div><div className="grid gap-2 text-[#667085]"><span>{agentLogs.join(' ') || 'No agent analysis yet.'}</span></div></div>
+      <div className="border-t border-[#d9dee7] pt-3"><div className="mb-2 font-semibold">Agent summary</div><div className="grid gap-2">{agentCards.map(({ role, message }) => <div key={role} className="rounded border border-[#d9dee7] bg-white p-3"><div className="font-bold text-[#2563eb]">{role}</div><div className="mt-2 leading-5 text-[#111827]">{message}</div></div>)}</div></div>
     </div>
   )
 }
@@ -487,8 +491,13 @@ function LearningTab({ misconception, recurrenceCount, sameStreak, agentLogs }) 
   const [attempts, setAttempts] = useState([])
   useEffect(() => {
     if (!misconception?.id) return
-    axios.get(`${API_BASE}/attempts/test-user-1/${encodeURIComponent(misconception.id)}`)
-      .then((response) => setAttempts(response.data))
+    const attemptsUrl = `${API_BASE}/attempts/test-user-1/${encodeURIComponent(misconception.id)}`
+    console.log('[LearningTab] fetching attempts:', attemptsUrl)
+    axios.get(attemptsUrl)
+      .then((response) => {
+        console.log('[LearningTab] attempts response:', { status: response.status, body: response.data })
+        setAttempts(response.data)
+      })
       .catch(() => setAttempts([]))
   }, [misconception?.id, recurrenceCount])
   const judge = agentLogs.find((line) => line.startsWith('[JUDGE]'))
@@ -700,11 +709,7 @@ function App() {
       })()
 
       if (agentLines.length > 0) {
-        setAgentLogs((prev) => [
-          ...prev.filter((l) => !l.endsWith('_')),
-          ...agentLines,
-          '> _',
-        ])
+        setAgentLogs([...agentLines, '> _'])
       }
       // Judge hint — contract: data.judge, legacy fallback: data.tutor_response
       const hint = data.judge ?? data.tutor_response
@@ -730,11 +735,7 @@ function App() {
         ...prev,
         { role: 'bot', content: `⚠️ Error: ${msg}` },
       ])
-      setAgentLogs((prev) => [
-        ...prev.filter((l) => !l.endsWith('_')),
-        `> [error] ${msg}`,
-        '> _',
-      ])
+      setAgentLogs([`> [error] ${msg}`, '> _'])
     } finally {
       setIsLoading(false)
     }
