@@ -112,3 +112,39 @@ class SQLMetricsRepository(MetricsRepository):
             return prior_count
         finally:
             connection.close()
+
+    async def get_recent_attempts(
+        self,
+        user_id: str,
+        misconception_id: str,
+        limit: int = 5,
+    ) -> list[dict]:
+        return await asyncio.to_thread(
+            self._get_recent_attempts,
+            user_id,
+            misconception_id,
+            limit,
+        )
+
+    def _get_recent_attempts(
+        self,
+        user_id: str,
+        misconception_id: str,
+        limit: int,
+    ) -> list[dict]:
+        connection = sqlite3.connect(self._database_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(
+                """
+                SELECT id, confidence, created_at
+                FROM misconception_events
+                WHERE user_id = ? AND misconception_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (user_id, misconception_id, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()

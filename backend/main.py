@@ -10,10 +10,12 @@ from pydantic import BaseModel, Field
 import httpx
 
 import orchestrator
+from db.sql_repo import SQLMetricsRepository
 from services.ollama_client import OllamaClient
 from services.test_runner import ExecutionDetail, TestResults
 
 _llm = OllamaClient()  # shared local Ollama singleton for /chat
+_metrics_repo = SQLMetricsRepository()
 
 # ------------------------------------------------------------------
 # Logging — prints agent discussion to the uvicorn terminal.
@@ -146,6 +148,7 @@ async def submit_code(payload: CodeRequest) -> SubmitResponse:
             language=payload.language,
             user_id=payload.user_id,
             problem_id=payload.problem_id,
+            repo=_metrics_repo,
         )
     except httpx.TimeoutException:
         raise HTTPException(
@@ -184,6 +187,15 @@ async def submit_code(payload: CodeRequest) -> SubmitResponse:
         test_results=result.test_results,
         execution=result.test_results.execution if result.test_results else None,
     )
+
+
+@app.get(
+    "/attempts/{user_id}/{misconception_id}",
+    response_model=list[dict],
+    summary="Get recent attempts for a misconception",
+)
+async def get_recent_attempts(user_id: str, misconception_id: str) -> list[dict]:
+    return await _metrics_repo.get_recent_attempts(user_id, misconception_id)
 
 
 # ---------------------------------------------------------------------------

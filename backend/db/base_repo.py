@@ -49,3 +49,12 @@ class MetricsRepository(ABC):
         The first occurrence for an exact ``(user_id, misconception_id)``
         pair returns ``0``.
         """
+
+    @abstractmethod
+    async def get_recent_attempts(
+        self,
+        user_id: str,
+        misconception_id: str,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Return recent misconception events, newest first."""

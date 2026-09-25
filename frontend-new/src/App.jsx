@@ -2,9 +2,9 @@ import { useState, useRef, useEffect } from 'react'
 import { Code2, Brain, Terminal, Send, Loader2, Layers, ChevronRight, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, CheckCircle2, XCircle, Check, X } from 'lucide-react'
 import MonacoEditor from '@monaco-editor/react'
 import axios from 'axios'
-import { researchMockData } from './mock/researchMockData.js'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? '/api'
+const EMPTY_TESTS = []
 
 // ─── Stack Problems Data ───────────────────────────────────────────────────────
 const PROBLEMS = [
@@ -184,15 +184,12 @@ function ProblemPane({ problem }) {
 
 // ─── Test Results Panel ───────────────────────────────────────────────────────
 function TestResultsPanel({ testResults }) {
+  const [selectedIdx, setSelectedIdx] = useState(0)
+  const tests = testResults?.tests || EMPTY_TESTS
+
   if (!testResults) return null
 
-  const { passed, total, failed, status, reason, tests = [] } = testResults
-  const [selectedIdx, setSelectedIdx] = useState(0)
-
-  useEffect(() => {
-    const fIdx = tests.findIndex((t) => !t.passed)
-    setSelectedIdx(fIdx !== -1 ? fIdx : 0)
-  }, [testResults])
+  const { passed, total, failed, status, reason } = testResults
 
   const selectedTest = tests[selectedIdx] || tests[0]
   const isAllPassed = status === 'passed' && failed === 0
@@ -465,48 +462,56 @@ function TutorPanel({ chatHistory, chatInput, setChatInput, onSendChat, isChatLo
   )
 }
 
-function EvaluationTab() {
-  const { execution, agents, misconception, feedback } = researchMockData
+function EvaluationTab({ agentLogs, misconception, testResults }) {
+  const execution = testResults?.execution
+  const passed = testResults ? `${testResults.passed} / ${testResults.total} tests passed` : 'No submission yet'
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs">
       <div className="grid grid-cols-3 gap-2">
         <div className="rounded border border-[#d9dee7] bg-white p-2"><div className="text-[#667085]">Submission</div><div className="mt-1 font-semibold text-[#16a34a]">Received</div></div>
-        <div className="rounded border border-[#d9dee7] bg-white p-2"><div className="text-[#667085]">Tests</div><div className="mt-1 font-semibold">{execution.passed}</div></div>
-        <div className="rounded border border-[#d9dee7] bg-white p-2"><div className="text-[#667085]">Runtime</div><div className="mt-1 font-semibold">{execution.runtime}</div></div>
+        <div className="rounded border border-[#d9dee7] bg-white p-2"><div className="text-[#667085]">Tests</div><div className="mt-1 font-semibold">{passed}</div></div>
+        <div className="rounded border border-[#d9dee7] bg-white p-2"><div className="text-[#667085]">Runtime</div><div className="mt-1 font-semibold">{execution?.success ? 'Passed' : execution ? 'Failed' : 'Pending'}</div></div>
       </div>
-      <div className="rounded border border-[#fca5a5] bg-[#fef2f2] p-3"><div className="font-semibold text-[#dc2626]">{execution.status}</div><div className="mt-1 font-mono text-[#7f1d1d]">{execution.failedTest.error}</div><div className="mt-1 text-[#991b1b]">Line {execution.failedTest.line} · input "]"</div></div>
-      <div className="rounded border border-[#d9dee7] bg-white p-3"><div className="mb-2 font-semibold">Evaluation flow</div><div className="flex flex-wrap items-center gap-1 text-[#667085]"><span>Submission ✓</span><span>→</span><span>Execution ✓</span><span>→</span><span>Critic + Defender ✓</span><span>→</span><span>Judge ✓</span><span>→</span><span className="text-[#d97706]">{misconception.id} !</span><span>→</span><span className="text-[#2563eb]">{feedback.level}</span></div></div>
-      <div className="rounded border border-[#d9dee7] bg-white p-3"><div className="mb-2 font-semibold">Code analysis</div><div className="grid grid-cols-2 gap-2 text-[#667085]"><span>Time: <b className="text-[#111827]">O(n)</b></span><span>Space: <b className="text-[#111827]">O(n)</b></span><span>Data: <b className="text-[#111827]">Stack</b></span><span>Memory: <b className="text-[#111827]">{execution.memory}</b></span></div></div>
-      <div className="border-t border-[#d9dee7] pt-3"><div className="mb-2 font-semibold">Agent summary</div><div className="grid gap-2 text-[#667085]"><span><b className="text-[#111827]">Critic:</b> {agents.critic.finding}</span><span><b className="text-[#111827]">Defender:</b> {agents.defender.finding}</span><span><b className="text-[#111827]">Judge:</b> {agents.judge.finding}</span></div></div>
+      <div className="rounded border border-[#d9dee7] bg-white p-3"><div className="font-semibold">Execution</div><div className="mt-1 font-mono text-[#7f1d1d]">{execution?.stderr || testResults?.reason || 'Awaiting submission'}</div></div>
+      <div className="rounded border border-[#d9dee7] bg-white p-3"><div className="mb-2 font-semibold">Evaluation flow</div><div className="flex flex-wrap items-center gap-1 text-[#667085]"><span>Submission</span><span>→</span><span>Execution</span><span>→</span><span>Critic + Defender</span><span>→</span><span>Judge</span><span>→</span><span className="text-[#d97706]">{misconception?.id || 'Pending'}</span></div></div>
+      <div className="border-t border-[#d9dee7] pt-3"><div className="mb-2 font-semibold">Agent summary</div><div className="grid gap-2 text-[#667085]"><span>{agentLogs.join(' ') || 'No agent analysis yet.'}</span></div></div>
     </div>
   )
 }
 
-function AgentsTab() {
-  const { agents } = researchMockData
-  return <div className="flex-1 overflow-y-auto p-4 text-xs"><div className="mb-3 flex items-center justify-between"><span className="font-semibold">Multi-agent evaluation</span><span className="text-[#16a34a]">Completed</span></div><div className="space-y-2">{[['CRITIC', agents.critic], ['DEFENDER', agents.defender], ['JUDGE', agents.judge]].map(([role, agent]) => <div key={role} className="rounded border border-[#d9dee7] bg-white p-3"><div className="font-bold text-[#2563eb]">{role}</div><div className="mt-2 leading-5 text-[#111827]">{agent.finding}</div><div className="mt-1 text-[#667085]">Evidence: {agent.evidence}</div></div>)}</div><div className="mt-4 rounded border border-[#d9dee7] bg-white p-3 text-center text-[#667085]">Submission ↓ Critic + Defender ↓ Judge</div></div>
+function AgentsTab({ agentLogs }) {
+  return <div className="flex-1 overflow-y-auto p-4 text-xs"><div className="mb-3 flex items-center justify-between"><span className="font-semibold">Multi-agent evaluation</span><span className="text-[#16a34a]">{agentLogs.length > 2 ? 'Completed' : 'Waiting'}</span></div><div className="space-y-2">{['CRITIC', 'DEFENDER', 'JUDGE'].map((role) => { const log = agentLogs.find((line) => line.startsWith(`[${role}]`)); return <div key={role} className="rounded border border-[#d9dee7] bg-white p-3"><div className="font-bold text-[#2563eb]">{role}</div><div className="mt-2 leading-5 text-[#111827]">{log?.replace(`[${role}] `, '') || 'No analysis yet.'}</div></div> })}</div><div className="mt-4 rounded border border-[#d9dee7] bg-white p-3 text-center text-[#667085]">Submission → Critic + Defender → Judge</div></div>
 }
 
-function LearningTab() {
-  const { misconception, trajectory, feedback } = researchMockData
-  return <div className="flex-1 overflow-y-auto p-4 text-xs"><div className="rounded border border-[#fcd34d] bg-[#fffbeb] p-3"><div className="font-semibold text-[#d97706]">Learning insights</div><div className="mt-2 text-sm font-semibold text-[#111827]">{misconception.label}</div><div className="mt-1 font-mono text-[#92400e]">{misconception.id}</div><div className="mt-2 leading-5 text-[#667085]">Evidence: {misconception.evidence} · Line {misconception.line}</div><div className="mt-2 text-[#d97706]">Model confidence: {misconception.confidence}</div></div><div className="mt-4 font-semibold">Recent attempts</div><div className="mt-2 space-y-2">{trajectory.map(([attempt, status, strategy]) => <div key={attempt} className="flex items-center justify-between rounded border border-[#d9dee7] bg-white px-3 py-2"><span className="font-medium">{attempt}</span><span className="text-[#667085]">{misconception.id} · {status}</span><span className="text-[#2563eb]">{strategy}</span></div>)}</div><div className="mt-4 rounded border border-[#bfdbfe] bg-[#eff6ff] p-3"><div className="font-semibold text-[#2563eb]">Adaptive feedback · {feedback.level}</div><div className="mt-2 leading-5 text-[#1e3a8a]">{feedback.hint}</div></div></div>
+function LearningTab({ misconception, recurrenceCount, sameStreak, agentLogs }) {
+  const [attempts, setAttempts] = useState([])
+  useEffect(() => {
+    if (!misconception?.id) return
+    axios.get(`${API_BASE}/attempts/test-user-1/${encodeURIComponent(misconception.id)}`)
+      .then((response) => setAttempts(response.data))
+      .catch(() => setAttempts([]))
+  }, [misconception?.id, recurrenceCount])
+  const judge = agentLogs.find((line) => line.startsWith('[JUDGE]'))
+  const feedbackLabel = sameStreak ? `${recurrenceCount}x recurrence` : 'Current attempt'
+  const displayedAttempts = misconception?.id ? attempts : []
+  return <div className="flex-1 overflow-y-auto p-4 text-xs"><div className="rounded border border-[#fcd34d] bg-[#fffbeb] p-3"><div className="font-semibold text-[#d97706]">Learning insights</div><div className="mt-2 text-sm font-semibold text-[#111827]">{misconception?.id ? misconception.id.replace(/-/g, ' ') : 'No misconception detected'}</div><div className="mt-1 font-mono text-[#92400e]">{misconception?.id || 'Awaiting submission'}</div><div className="mt-2 leading-5 text-[#667085]">Evidence line: {misconception?.evidence_line || 'N/A'}</div><div className="mt-2 text-[#d97706]">Model confidence: {misconception ? `${Math.round(misconception.confidence * 100)}%` : 'N/A'}</div></div><div className="mt-4 font-semibold">Recent attempts</div><div className="mt-2 space-y-2">{displayedAttempts.map((attempt, index) => <div key={attempt.id} className="flex items-center justify-between rounded border border-[#d9dee7] bg-white px-3 py-2"><span className="font-medium">Attempt {displayedAttempts.length - index}</span><span className="text-[#667085]">{misconception.id} · {index === 0 ? 'Current' : 'Repeated'}</span><span className="text-[#2563eb]">{Math.round(attempt.confidence * 100)}% confidence</span></div>)}</div><div className="mt-4 rounded border border-[#bfdbfe] bg-[#eff6ff] p-3"><div className="font-semibold text-[#2563eb]">Adaptive feedback · {feedbackLabel}</div><div className="mt-2 leading-5 text-[#1e3a8a]">{judge?.replace('[JUDGE] ', '') || 'Submit code to receive adaptive feedback.'}</div></div></div>
 }
 
-function IntelligencePanel({ chatHistory, chatInput, setChatInput, onSendChat, isChatLoading, terminalCollapsed }) {
+function IntelligencePanel({ chatHistory, chatInput, setChatInput, onSendChat, isChatLoading, terminalCollapsed, agentLogs, misconception, recurrenceCount, sameStreak, testResults }) {
   const [tab, setTab] = useState('Tutor')
   return <div className={`flex min-h-0 flex-col border-b border-[#313244] bg-[#f5f7fa] ${terminalCollapsed ? 'flex-1' : 'h-[58%]'}`}>
     <div className="flex shrink-0 items-center gap-1 border-b border-[#d9dee7] bg-white px-3 py-2">
       {['Tutor', 'Evaluation', 'Agents', 'Learning'].map((item) => <button key={item} onClick={() => setTab(item)} className={`border-b-2 px-2 py-1.5 text-xs font-semibold ${tab === item ? 'border-[#2563eb] text-[#2563eb]' : 'border-transparent text-[#667085]'}`}>{item}</button>)}
     </div>
     {tab === 'Tutor' && <TutorPanel chatHistory={chatHistory} chatInput={chatInput} setChatInput={setChatInput} onSendChat={onSendChat} isChatLoading={isChatLoading} isCollapsed={false} onToggle={() => {}} embedded hideHeader />}
-    {tab === 'Evaluation' && <EvaluationTab />}
-    {tab === 'Agents' && <AgentsTab />}
-    {tab === 'Learning' && <LearningTab />}
+    {tab === 'Evaluation' && <EvaluationTab agentLogs={agentLogs} misconception={misconception} testResults={testResults} />}
+    {tab === 'Agents' && <AgentsTab agentLogs={agentLogs} />}
+    {tab === 'Learning' && <LearningTab misconception={misconception} recurrenceCount={recurrenceCount} sameStreak={sameStreak} agentLogs={agentLogs} />}
   </div>
 }
 
 // ─── Bottom-Right Panel — Agent Terminal ──────────────────────────────────────
-function AgentTerminal({ agentLogs, misconception, recurrenceCount, sameStreak, isCollapsed, onToggle }) {
+function AgentTerminal({ agentLogs, misconception, recurrenceCount, isCollapsed, onToggle }) {
   const endRef = useRef(null)
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -777,13 +782,17 @@ function App() {
             onSendChat={handleSendChat}
             isChatLoading={isChatLoading}
             terminalCollapsed={isTerminalCollapsed}
+            agentLogs={agentLogs}
+            misconception={misconception}
+            recurrenceCount={recurrenceCount}
+            sameStreak={sameStreak}
+            testResults={testResults}
           />
         )}
         <AgentTerminal
           agentLogs={agentLogs}
           misconception={misconception}
           recurrenceCount={recurrenceCount}
-          sameStreak={sameStreak}
           isCollapsed={isTerminalCollapsed}
           onToggle={() => setIsTerminalCollapsed((prev) => !prev)}
         />
